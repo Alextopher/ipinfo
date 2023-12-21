@@ -45,21 +45,23 @@ pub struct IpInfoConfig {
 
     /// The size of the LRU cache. (default: 100 IPs)
     pub cache_size: usize,
+}
 
-    // Default mapping of country codes to country names
-    pub defaut_countries: Option<HashMap<String, String>>,
+pub struct LocalizationTables<'a> {
+    // Mapping of country codes to country names
+    pub countries: &'a HashMap<String, String>,
 
-    // Default list of EU countries
-    pub default_eu: Option<Vec<String>>,
+    // List of EU countries
+    pub eu: &'a [String],
 
-    // Default mapping of country codes to their respective flag emoji and unicode
-    pub default_flags: Option<HashMap<String, CountryFlag>>,
+    // Mapping of country codes to their respective flag emoji and unicode
+    pub flags: &'a HashMap<String, CountryFlag>,
 
-    // Default mapping of currencies to their respective currency code and symbol
-    pub default_currencies: Option<HashMap<String, CountryCurrency>>,
+    // Mapping of currencies to their respective currency code and symbol
+    pub currencies: &'a HashMap<String, CountryCurrency>,
 
-    // Default mapping of country codes to their respective continent code and name
-    pub default_continents: Option<HashMap<String, Continent>>,
+    // Mapping of country codes to their respective continent code and name
+    pub continents: &'a HashMap<String, Continent>,
 }
 
 impl Default for IpInfoConfig {
@@ -68,25 +70,35 @@ impl Default for IpInfoConfig {
             token: None,
             timeout: Duration::from_secs(3),
             cache_size: 100,
-            defaut_countries: None,
-            default_eu: None,
-            default_flags: None,
-            default_currencies: None,
-            default_continents: None,
         }
     }
 }
 
 /// IPinfo requests context structure.
-pub struct IpInfo {
+impl Default for LocalizationTables<'_> {
+    fn default() -> Self {
+        Self {
+            countries: &COUNTRIES,
+            eu: &EU,
+            flags: &FLAGS,
+            currencies: &CURRENCIES,
+            continents: &CONTINENTS,
+        }
+    }
+}
+
+/// IpInfo.io requests context structure.
+pub struct IpInfo<'a> {
     token: Option<String>,
     client: reqwest::Client,
     cache: LruCache<String, IpDetails>,
-    countries: HashMap<String, String>,
-    eu: Vec<String>,
-    country_flags: HashMap<String, CountryFlag>,
-    country_currencies: HashMap<String, CountryCurrency>,
-    continents: HashMap<String, Continent>,
+
+    // Localization tables
+    countries: &'a HashMap<String, String>,
+    eu: &'a [String],
+    country_flags: &'a HashMap<String, CountryFlag>,
+    country_currencies: &'a HashMap<String, CountryCurrency>,
+    continents: &'a HashMap<String, Continent>,
 }
 
 pub struct BatchReqOpts {
@@ -105,8 +117,8 @@ impl Default for BatchReqOpts {
     }
 }
 
-impl IpInfo {
-    /// Construct a new IpInfo structure.
+impl IpInfo<'static> {
+    /// Construct a new IpInfo structure with custom configuration and default localization tables.
     ///
     /// # Examples
     ///
@@ -116,51 +128,62 @@ impl IpInfo {
     /// let ipinfo = IpInfo::new(Default::default()).expect("should construct");
     /// ```
     pub fn new(config: IpInfoConfig) -> Result<Self, IpError> {
+        Self::new_with_localization_tables(
+            config,
+            LocalizationTables::default(),
+        )
+    }
+
+    /// Construct a new IpInfo structure with default configuration and default localization tables.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ipinfo::IpInfo;
+    ///
+    /// let ipinfo = IpInfo::with_defaults().expect("should construct");
+    /// ```
+    pub fn with_defaults() -> Result<Self, IpError> {
+        Self::new(Default::default())
+    }
+}
+
+impl<'a> IpInfo<'a> {
+    /// Construct a new IpInfo structure with custom configuration and localization tables.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ipinfo::{IpInfo, LocalizationTables};
+    ///
+    /// // Custom EU countries
+    /// let eu = vec!["DE".to_string(), "FR".to_string()];
+    /// let localization_tables = LocalizationTables {
+    ///     eu: &eu,
+    ///     ..Default::default()
+    /// };
+    ///
+    /// let ipinfo = IpInfo::new_with_localization_tables(Default::default(), localization_tables).expect("should construct");
+    /// ```
+    pub fn new_with_localization_tables(
+        config: IpInfoConfig,
+        localization_tables: LocalizationTables<'a>,
+    ) -> Result<Self, IpError> {
         let client =
             reqwest::Client::builder().timeout(config.timeout).build()?;
 
-        let mut ipinfo_obj = Self {
+        let ipinfo_obj = Self {
             client,
             token: config.token,
             cache: LruCache::new(
                 NonZeroUsize::new(config.cache_size).unwrap(),
             ),
-            countries: HashMap::new(),
-            eu: Vec::new(),
-            country_flags: HashMap::new(),
-            country_currencies: HashMap::new(),
-            continents: HashMap::new(),
+            countries: localization_tables.countries,
+            eu: localization_tables.eu,
+            country_flags: localization_tables.flags,
+            country_currencies: localization_tables.currencies,
+            continents: localization_tables.continents,
         };
-
-        if config.defaut_countries.is_none() {
-            ipinfo_obj.countries = COUNTRIES.clone();
-        } else {
-            ipinfo_obj.countries = config.defaut_countries.unwrap();
-        }
-
-        if config.default_eu.is_none() {
-            ipinfo_obj.eu = EU.clone();
-        } else {
-            ipinfo_obj.eu = config.default_eu.unwrap();
-        }
-
-        if config.default_flags.is_none() {
-            ipinfo_obj.country_flags = FLAGS.clone();
-        } else {
-            ipinfo_obj.country_flags = config.default_flags.unwrap();
-        }
-
-        if config.default_currencies.is_none() {
-            ipinfo_obj.country_currencies = CURRENCIES.clone();
-        } else {
-            ipinfo_obj.country_currencies = config.default_currencies.unwrap();
-        }
-
-        if config.default_continents.is_none() {
-            ipinfo_obj.continents = CONTINENTS.clone();
-        } else {
-            ipinfo_obj.continents = config.default_continents.unwrap();
-        }
 
         Ok(ipinfo_obj)
     }
@@ -171,6 +194,7 @@ impl IpInfo {
     ///
     /// ```no_run
     /// use ipinfo::{IpInfo, BatchReqOpts};
+    ///
     /// #[tokio::main]
     /// async fn main() {
     ///     let mut ipinfo = IpInfo::new(Default::default()).expect("should construct");
@@ -472,12 +496,11 @@ mod tests {
     use crate::IpErrorKind;
     use std::env;
 
-    fn get_ipinfo_client() -> IpInfo {
+    fn get_ipinfo_client() -> IpInfo<'static> {
         IpInfo::new(IpInfoConfig {
             token: Some(env::var("IPINFO_TOKEN").unwrap().to_string()),
             timeout: Duration::from_secs(3),
             cache_size: 100,
-            ..Default::default()
         })
         .expect("should construct")
     }
