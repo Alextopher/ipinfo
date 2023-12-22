@@ -27,10 +27,12 @@
 //! * Smart LRU cache for cost and quota savings.
 //! * Structured and type checked query results.
 //! * Bulk IP address lookup using IPinfo batch API.
+//!
 //! ## Example
 //!
 //! ```no_run
 //! use ipinfo::{IpInfo, IpInfoConfig};
+//!
 //! #[tokio::main]
 //! async fn main() {
 //!   // Setup token and other configurations.
@@ -56,11 +58,13 @@ mod api;
 mod bogon;
 mod data;
 mod ipinfo;
+mod localization;
 mod util;
 
-pub use crate::ipinfo::*;
 pub use api::*;
 pub use bogon::*;
 pub use data::*;
 pub use error::*;
+pub use ipinfo::*;
+pub use localization::*;
 pub use util::*;

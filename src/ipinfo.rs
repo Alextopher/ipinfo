@@ -15,9 +15,9 @@
 use std::{collections::HashMap, num::NonZeroUsize, time::Duration};
 
 use crate::{
-    cache_key, is_bogon, Continent, CountryCurrency, CountryFlag, IpDetails,
-    IpError, BATCH_MAX_SIZE, BATCH_REQ_TIMEOUT_DEFAULT, CONTINENTS, COUNTRIES,
-    CURRENCIES, EU, FLAGS, VERSION,
+    cache_key, is_bogon,
+    localization::{Localization, StaticTables},
+    IpDetails, IpError, BATCH_MAX_SIZE, BATCH_REQ_TIMEOUT_DEFAULT, VERSION,
 };
 
 use lru::LruCache;
@@ -47,23 +47,6 @@ pub struct IpInfoConfig {
     pub cache_size: usize,
 }
 
-pub struct LocalizationTables<'a> {
-    // Mapping of country codes to country names
-    pub countries: &'a HashMap<String, String>,
-
-    // List of EU countries
-    pub eu: &'a [String],
-
-    // Mapping of country codes to their respective flag emoji and unicode
-    pub flags: &'a HashMap<String, CountryFlag>,
-
-    // Mapping of currencies to their respective currency code and symbol
-    pub currencies: &'a HashMap<String, CountryCurrency>,
-
-    // Mapping of country codes to their respective continent code and name
-    pub continents: &'a HashMap<String, Continent>,
-}
-
 impl Default for IpInfoConfig {
     fn default() -> Self {
         Self {
@@ -74,31 +57,12 @@ impl Default for IpInfoConfig {
     }
 }
 
-/// IPinfo requests context structure.
-impl Default for LocalizationTables<'_> {
-    fn default() -> Self {
-        Self {
-            countries: &COUNTRIES,
-            eu: &EU,
-            flags: &FLAGS,
-            currencies: &CURRENCIES,
-            continents: &CONTINENTS,
-        }
-    }
-}
-
 /// IpInfo.io requests context structure.
-pub struct IpInfo<'a> {
+pub struct IpInfo<T: Localization = StaticTables> {
     token: Option<String>,
     client: reqwest::Client,
     cache: LruCache<String, IpDetails>,
-
-    // Localization tables
-    countries: &'a HashMap<String, String>,
-    eu: &'a [String],
-    country_flags: &'a HashMap<String, CountryFlag>,
-    country_currencies: &'a HashMap<String, CountryCurrency>,
-    continents: &'a HashMap<String, Continent>,
+    localization: T,
 }
 
 pub struct BatchReqOpts {
@@ -117,7 +81,7 @@ impl Default for BatchReqOpts {
     }
 }
 
-impl IpInfo<'static> {
+impl IpInfo<StaticTables> {
     /// Construct a new IpInfo structure with custom configuration and default localization tables.
     ///
     /// # Examples
@@ -128,10 +92,7 @@ impl IpInfo<'static> {
     /// let ipinfo = IpInfo::new(Default::default()).expect("should construct");
     /// ```
     pub fn new(config: IpInfoConfig) -> Result<Self, IpError> {
-        Self::new_with_localization_tables(
-            config,
-            LocalizationTables::default(),
-        )
+        Self::new_with_localization_tables(config, StaticTables::default())
     }
 
     /// Construct a new IpInfo structure with default configuration and default localization tables.
@@ -148,26 +109,26 @@ impl IpInfo<'static> {
     }
 }
 
-impl<'a> IpInfo<'a> {
+impl<T: Localization> IpInfo<T> {
     /// Construct a new IpInfo structure with custom configuration and localization tables.
     ///
     /// # Examples
     ///
     /// ```
-    /// use ipinfo::{IpInfo, LocalizationTables};
+    /// use ipinfo::{IpInfo, BorrowedTables};
     ///
     /// // Custom EU countries
     /// let eu = vec!["DE".to_string(), "FR".to_string()];
-    /// let localization_tables = LocalizationTables {
+    /// let localization = BorrowedTables {
     ///     eu: &eu,
     ///     ..Default::default()
     /// };
     ///
-    /// let ipinfo = IpInfo::new_with_localization_tables(Default::default(), localization_tables).expect("should construct");
+    /// let ipinfo = IpInfo::new_with_localization_tables(Default::default(), localization).expect("should construct");
     /// ```
     pub fn new_with_localization_tables(
         config: IpInfoConfig,
-        localization_tables: LocalizationTables<'a>,
+        localization: T,
     ) -> Result<Self, IpError> {
         let client =
             reqwest::Client::builder().timeout(config.timeout).build()?;
@@ -178,11 +139,7 @@ impl<'a> IpInfo<'a> {
             cache: LruCache::new(
                 NonZeroUsize::new(config.cache_size).unwrap(),
             ),
-            countries: localization_tables.countries,
-            eu: localization_tables.eu,
-            country_flags: localization_tables.flags,
-            country_currencies: localization_tables.currencies,
-            continents: localization_tables.continents,
+            localization,
         };
 
         Ok(ipinfo_obj)
@@ -454,22 +411,25 @@ impl<'a> IpInfo<'a> {
 
     // Add country details and EU status to response
     fn populate_static_details(&self, details: &mut IpDetails) {
-        if !&details.country.is_empty() {
-            let country_name = self.countries.get(&details.country).unwrap();
-            details.country_name = Some(country_name.to_string());
-            details.is_eu = Some(self.eu.contains(&details.country));
-            let country_flag =
-                self.country_flags.get(&details.country).unwrap();
-            details.country_flag = Some(country_flag.to_owned());
-            let file_ext = ".svg";
-            details.country_flag_url = Some(
-                COUNTRY_FLAG_URL.to_string() + &details.country + file_ext,
-            );
-            let country_currency =
-                self.country_currencies.get(&details.country).unwrap();
-            details.country_currency = Some(country_currency.to_owned());
-            let continent = self.continents.get(&details.country).unwrap();
-            details.continent = Some(continent.to_owned());
+        if !details.country.is_empty() {
+            let country_name: Option<&str> =
+                self.localization.country_name(&details.country);
+            details.country_name = country_name.map(|x| x.to_string());
+
+            let is_eu = self.localization.is_eu(&details.country);
+            details.is_eu = Some(is_eu);
+
+            let flag = self.localization.flag(&details.country);
+            details.country_flag = flag.cloned();
+
+            details.country_flag_url =
+                Some(format!("{}{}.svg", COUNTRY_FLAG_URL, &details.country));
+
+            let currency = self.localization.currency(&details.country);
+            details.country_currency = currency.cloned();
+
+            let continent = self.localization.continent(&details.country);
+            details.continent = continent.cloned();
         }
     }
 
@@ -493,10 +453,10 @@ impl<'a> IpInfo<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::IpErrorKind;
+    use crate::{Continent, CountryCurrency, CountryFlag, IpErrorKind};
     use std::env;
 
-    fn get_ipinfo_client() -> IpInfo<'static> {
+    fn get_ipinfo_client() -> IpInfo {
         IpInfo::new(IpInfoConfig {
             token: Some(env::var("IPINFO_TOKEN").unwrap().to_string()),
             timeout: Duration::from_secs(3),
@@ -515,7 +475,7 @@ mod tests {
 
     #[test]
     fn request_headers_are_canonical() {
-        let headers = IpInfo::construct_headers();
+        let headers = IpInfo::<StaticTables>::construct_headers();
 
         assert_eq!(
             headers[USER_AGENT],
